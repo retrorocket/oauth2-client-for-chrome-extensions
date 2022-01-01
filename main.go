@@ -18,7 +18,7 @@ var (
 	config = oauth2.Config{
 		ClientID:     os.Getenv("RC_CLIENT_ID"),
 		ClientSecret: os.Getenv("RC_CLIENT_SECRET"),
-		RedirectURL:  "http://localhost:18099/oauth2",
+		RedirectURL:  "https://rcapi.retrorocket.biz/oauth2",
 		Scopes:       []string{"https://www.googleapis.com/auth/calendar"},
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://accounts.google.com/o/oauth2/auth",
