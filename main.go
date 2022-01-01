@@ -19,7 +19,10 @@ var (
 		ClientID:     os.Getenv("RC_CLIENT_ID"),
 		ClientSecret: os.Getenv("RC_CLIENT_SECRET"),
 		RedirectURL:  "https://rcapi.retrorocket.biz/oauth2",
-		Scopes:       []string{"https://www.googleapis.com/auth/calendar"},
+		Scopes: []string{
+			"https://www.googleapis.com/auth/calendar.events",
+			"https://www.googleapis.com/auth/calendar.readonly",
+		},
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://accounts.google.com/o/oauth2/auth",
 			TokenURL: "https://accounts.google.com/o/oauth2/token",
