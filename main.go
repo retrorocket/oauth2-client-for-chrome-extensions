@@ -93,7 +93,7 @@ func main() {
 		if err = sess.Save(c.Request(), c.Response()); err != nil {
 			return err
 		}
-		return c.Redirect(http.StatusSeeOther, "https://mlcpcfkgkgnpfmjplcjcegkolppjeaoa.chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
+		return c.Redirect(http.StatusSeeOther, "https://femihkgadmhfmdlkjjfjcgleppfggadk.chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
 
 	})
 
