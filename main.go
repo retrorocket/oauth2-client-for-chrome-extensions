@@ -68,7 +68,7 @@ func main() {
 			return err
 		}
 
-		return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state))
+		return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce))
 	})
 
 	// Routes
@@ -92,7 +92,7 @@ func main() {
 		if err = sess.Save(c.Request(), c.Response()); err != nil {
 			return err
 		}
-		return c.Redirect(http.StatusSeeOther, "https://mlcpcfkgkgnpfmjplcjcegkolppjeaoa.chromiumapp.org#access_token="+token.AccessToken)
+		return c.Redirect(http.StatusSeeOther, "https://mlcpcfkgkgnpfmjplcjcegkolppjeaoa.chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
 
 	})
 
