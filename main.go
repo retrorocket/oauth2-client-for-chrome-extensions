@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
@@ -93,6 +94,22 @@ func main() {
 			return err
 		}
 		return c.Redirect(http.StatusSeeOther, "https://mlcpcfkgkgnpfmjplcjcegkolppjeaoa.chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
+
+	})
+
+	// Routes
+	e.POST("/refresh", func(c echo.Context) error {
+
+		refreshtoken := c.FormValue("refreshtoken")
+		token := new(oauth2.Token)
+		token.AccessToken = ""
+		token.RefreshToken = refreshtoken
+		token.Expiry = time.Now()
+		newtoken, err := config.TokenSource(c.Request().Context(), token).Token()
+		if err != nil {
+			return err
+		}
+		return c.JSON(http.StatusOK, newtoken)
 
 	})
 
