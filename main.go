@@ -62,6 +62,7 @@ func main() {
 			Path:     "/",
 			MaxAge:   60 * 5,
 			HttpOnly: true,
+			Secure:   true,
 		}
 		state := RandomString(20)
 		sess.Values["state"] = state
