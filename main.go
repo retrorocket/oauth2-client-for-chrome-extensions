@@ -41,7 +41,69 @@ func RandomString(n int) string {
 	return string(s)
 }
 
+func getRedirectUrl(c echo.Context) error {
+	sess, _ := session.Get("session", c)
+	sess.Options = &sessions.Options{
+		Path:     "/",
+		MaxAge:   60 * 5,
+		HttpOnly: true,
+		Secure:   true,
+	}
+	state := RandomString(20)
+	sess.Values["state"] = state
+	err := sess.Save(c.Request(), c.Response())
+	if err != nil {
+		return err
+	}
+
+	return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce))
+}
+
+func getToken(c echo.Context) error {
+	stateParam := c.QueryParam("state")
+	sess, _ := session.Get("session", c)
+	state, _ := sess.Values["state"]
+	if state != stateParam {
+		return c.NoContent(http.StatusForbidden)
+	}
+	code := c.QueryParam("code")
+	if code == "" {
+		return c.NoContent(http.StatusForbidden)
+	}
+	token, err := config.Exchange(oauth2.NoContext, code)
+	if err != nil {
+		return err
+	}
+	sess.Options.MaxAge = -1
+	err = sess.Save(c.Request(), c.Response())
+	if err != nil {
+		return err
+	}
+	return c.Redirect(http.StatusSeeOther, "https://femihkgadmhfmdlkjjfjcgleppfggadk.chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
+}
+
+func getNewToken(c echo.Context) error {
+	refreshtoken := c.FormValue("refreshtoken")
+	token := new(oauth2.Token)
+	token.AccessToken = ""
+	token.RefreshToken = refreshtoken
+	token.Expiry = time.Now()
+	newtoken, err := config.TokenSource(c.Request().Context(), token).Token()
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, newtoken)
+
+}
+
 func main() {
+	router := NewRouter()
+	// Start server
+	router.Logger.Fatal(router.Start(":18099"))
+
+}
+
+func NewRouter() *echo.Echo {
 	// Echo instance
 	e := echo.New()
 	store, err := redisStore.NewRediStore(10, "tcp", ":6379", "", []byte(securecookie.GenerateRandomKey(32)))
@@ -55,66 +117,13 @@ func main() {
 	e.Use(middleware.Recover())
 
 	// Routes
-	e.GET("/try", func(c echo.Context) error {
-
-		sess, _ := session.Get("session", c)
-		sess.Options = &sessions.Options{
-			Path:     "/",
-			MaxAge:   60 * 5,
-			HttpOnly: true,
-			Secure:   true,
-		}
-		state := RandomString(20)
-		sess.Values["state"] = state
-		if err = sess.Save(c.Request(), c.Response()); err != nil {
-			return err
-		}
-
-		return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce))
-	})
+	e.GET("/try", getRedirectUrl)
 
 	// Routes
-	e.GET("/oauth2", func(c echo.Context) error {
-
-		stateParam := c.QueryParam("state")
-		sess, _ := session.Get("session", c)
-		state, _ := sess.Values["state"]
-		if state != stateParam {
-			return c.NoContent(http.StatusForbidden)
-		}
-		code := c.QueryParam("code")
-		if code == "" {
-			return c.NoContent(http.StatusForbidden)
-		}
-		token, err := config.Exchange(oauth2.NoContext, code)
-		if err != nil {
-			return err
-		}
-		sess.Options.MaxAge = -1
-		if err = sess.Save(c.Request(), c.Response()); err != nil {
-			return err
-		}
-		return c.Redirect(http.StatusSeeOther, "https://femihkgadmhfmdlkjjfjcgleppfggadk.chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
-
-	})
+	e.GET("/oauth2", getToken)
 
 	// Routes
-	e.POST("/refresh", func(c echo.Context) error {
+	e.POST("/refresh", getNewToken)
 
-		refreshtoken := c.FormValue("refreshtoken")
-		token := new(oauth2.Token)
-		token.AccessToken = ""
-		token.RefreshToken = refreshtoken
-		token.Expiry = time.Now()
-		newtoken, err := config.TokenSource(c.Request().Context(), token).Token()
-		if err != nil {
-			return err
-		}
-		return c.JSON(http.StatusOK, newtoken)
-
-	})
-
-	// Start server
-	e.Logger.Fatal(e.Start(":18099"))
-
+	return e
 }
