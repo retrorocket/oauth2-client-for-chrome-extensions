@@ -111,6 +111,10 @@ func NewRouter() *echo.Echo {
 		panic(err)
 	}
 	e.Use(session.Middleware(store))
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"chrome-extension://femihkgadmhfmdlkjjfjcgleppfggadk"},
+		AllowMethods: []string{http.MethodGet, http.MethodPost},
+	}))
 
 	// Middleware
 	e.Use(middleware.Logger())
