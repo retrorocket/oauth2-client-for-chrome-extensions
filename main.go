@@ -41,7 +41,7 @@ func RandomString(n int) string {
 	return string(s)
 }
 
-func getRedirectUrl(c echo.Context) error {
+func GetRedirectUrl(c echo.Context) error {
 	sess, _ := session.Get("session", c)
 	sess.Options = &sessions.Options{
 		Path:     "/",
@@ -59,7 +59,7 @@ func getRedirectUrl(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce))
 }
 
-func getToken(c echo.Context) error {
+func GetToken(c echo.Context) error {
 	stateParam := c.QueryParam("state")
 	sess, _ := session.Get("session", c)
 	state, _ := sess.Values["state"]
@@ -82,7 +82,7 @@ func getToken(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "https://femihkgadmhfmdlkjjfjcgleppfggadk.chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
 }
 
-func getNewToken(c echo.Context) error {
+func GetNewToken(c echo.Context) error {
 	refreshtoken := c.FormValue("refreshtoken")
 	token := new(oauth2.Token)
 	token.AccessToken = ""
@@ -117,13 +117,13 @@ func NewRouter() *echo.Echo {
 	e.Use(middleware.Recover())
 
 	// Routes
-	e.GET("/try", getRedirectUrl)
+	e.GET("/try", GetRedirectUrl)
 
 	// Routes
-	e.GET("/oauth2", getToken)
+	e.GET("/oauth2", GetToken)
 
 	// Routes
-	e.POST("/refresh", getNewToken)
+	e.POST("/refresh", GetNewToken)
 
 	return e
 }
