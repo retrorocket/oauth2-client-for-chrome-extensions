@@ -15,18 +15,23 @@ import (
 	redisStore "gopkg.in/boj/redistore.v1"
 )
 
+const (
+	redirectUrl = "https://client.retrorocket.biz/oauth2"
+	extentionId = "femihkgadmhfmdlkjjfjcgleppfggadk"
+)
+
 var (
 	config = oauth2.Config{
 		ClientID:     os.Getenv("RC_CLIENT_ID"),
 		ClientSecret: os.Getenv("RC_CLIENT_SECRET"),
-		RedirectURL:  "https://rcapi.retrorocket.biz/oauth2",
+		RedirectURL:  redirectUrl,
 		Scopes: []string{
 			"https://www.googleapis.com/auth/calendar.events",
 			"https://www.googleapis.com/auth/calendar.readonly",
 		},
 		Endpoint: oauth2.Endpoint{
-			AuthURL:  "https://accounts.google.com/o/oauth2/auth",
-			TokenURL: "https://accounts.google.com/o/oauth2/token",
+			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL: "https://oauth2.googleapis.com/token",
 		},
 	}
 )
@@ -79,7 +84,7 @@ func GetToken(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.Redirect(http.StatusSeeOther, "https://femihkgadmhfmdlkjjfjcgleppfggadk.chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
+	return c.Redirect(http.StatusSeeOther, "https://"+extentionId+".chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
 }
 
 func GetNewToken(c echo.Context) error {
@@ -111,8 +116,10 @@ func NewRouter() *echo.Echo {
 		panic(err)
 	}
 	e.Use(session.Middleware(store))
+
+	// Setting CORS
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"chrome-extension://femihkgadmhfmdlkjjfjcgleppfggadk", "extension://femihkgadmhfmdlkjjfjcgleppfggadk"},
+		AllowOrigins: []string{"chrome-extension://" + extentionId, "extension://" + extentionId},
 		AllowMethods: []string{http.MethodGet, http.MethodPost},
 	}))
 
@@ -122,11 +129,7 @@ func NewRouter() *echo.Echo {
 
 	// Routes
 	e.GET("/try", GetRedirectUrl)
-
-	// Routes
 	e.GET("/oauth2", GetToken)
-
-	// Routes
 	e.POST("/refresh", GetNewToken)
 
 	return e
