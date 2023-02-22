@@ -4,7 +4,6 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
@@ -15,16 +14,11 @@ import (
 	redisStore "gopkg.in/boj/redistore.v1"
 )
 
-const (
-	redirectUrl = "https://client.retrorocket.biz/oauth2"
-	extentionId = "femihkgadmhfmdlkjjfjcgleppfggadk"
-)
-
 var (
 	config = oauth2.Config{
 		ClientID:     os.Getenv("RC_CLIENT_ID"),
 		ClientSecret: os.Getenv("RC_CLIENT_SECRET"),
-		RedirectURL:  redirectUrl,
+		RedirectURL:  os.Getenv("RC_REDIRECT_URL"),
 		Scopes: []string{
 			"https://www.googleapis.com/auth/calendar.events",
 			"https://www.googleapis.com/auth/calendar.readonly",
@@ -61,7 +55,7 @@ func GetRedirectUrl(c echo.Context) error {
 		return err
 	}
 
-	return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce))
+	return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOnline))
 }
 
 func GetToken(c echo.Context) error {
@@ -79,33 +73,44 @@ func GetToken(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	sess.Options.MaxAge = -1
+	sess.Values["token"] = token.AccessToken
 	err = sess.Save(c.Request(), c.Response())
 	if err != nil {
 		return err
 	}
-	return c.Redirect(http.StatusSeeOther, "https://"+extentionId+".chromiumapp.org#access_token="+token.AccessToken+"&refresh_token="+token.RefreshToken)
+	return c.Redirect(http.StatusSeeOther, "/redirect")
 }
 
-func GetNewToken(c echo.Context) error {
-	refreshtoken := c.FormValue("refreshtoken")
-	token := new(oauth2.Token)
-	token.AccessToken = ""
-	token.RefreshToken = refreshtoken
-	token.Expiry = time.Now()
-	newtoken, err := config.TokenSource(c.Request().Context(), token).Token()
+type Post struct {
+	App string `json:"app"`
+}
+
+type Result struct {
+	Token string `json:"access_token"`
+}
+
+func ResponseToken(c echo.Context) error {
+	post := new(Post)
+	if err := c.Bind(post); err != nil {
+		return err
+	}
+	sess, _ := session.Get("session", c)
+	token, _ := sess.Values["token"]
+	sess.Options.MaxAge = -1
+	err := sess.Save(c.Request(), c.Response())
 	if err != nil {
 		return err
 	}
-	return c.JSON(http.StatusOK, newtoken)
-
+	result := &Result{
+		Token: token.(string),
+	}
+	return c.JSON(http.StatusOK, result)
 }
 
 func main() {
 	router := NewRouter()
 	// Start server
-	router.Logger.Fatal(router.Start(":18099"))
-
+	router.Logger.Fatal(router.Start(":18199"))
 }
 
 func NewRouter() *echo.Echo {
@@ -118,6 +123,7 @@ func NewRouter() *echo.Echo {
 	e.Use(session.Middleware(store))
 
 	// Setting CORS
+	extentionId := os.Getenv("RC_EXTENSION_ID")
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"chrome-extension://" + extentionId, "extension://" + extentionId},
 		AllowMethods: []string{http.MethodGet, http.MethodPost},
@@ -130,7 +136,7 @@ func NewRouter() *echo.Echo {
 	// Routes
 	e.GET("/try", GetRedirectUrl)
 	e.GET("/oauth2", GetToken)
-	e.POST("/refresh", GetNewToken)
+	e.POST("/token", ResponseToken)
 
 	return e
 }
