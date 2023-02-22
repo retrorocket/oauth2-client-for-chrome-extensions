@@ -94,6 +94,10 @@ func ResponseToken(c echo.Context) error {
 	if err := c.Bind(post); err != nil {
 		return err
 	}
+	extentionId := os.Getenv("RC_EXTENSION_ID")
+	if c.Request().Header.Get("Origin") != "chrome-extension://"+extentionId {
+		return c.NoContent(http.StatusForbidden)
+	}
 	sess, _ := session.Get("session", c)
 	token, _ := sess.Values["token"]
 	sess.Options.MaxAge = -1
