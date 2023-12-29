@@ -110,7 +110,7 @@ func ResponseToken(c echo.Context) error {
 func main() {
 	router := NewRouter()
 	// Start server
-	router.Logger.Fatal(router.Start(":18199"))
+	router.Logger.Fatal(router.Start(":28199"))
 }
 
 func NewRouter() *echo.Echo {
