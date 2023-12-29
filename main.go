@@ -28,6 +28,7 @@ var (
 			TokenURL: "https://oauth2.googleapis.com/token",
 		},
 	}
+	extentionId = os.Getenv("RC_EXTENSION_ID")
 )
 
 func RandomString(n int) string {
@@ -73,12 +74,7 @@ func GetToken(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	sess.Values["token"] = token.AccessToken
-	err = sess.Save(c.Request(), c.Response())
-	if err != nil {
-		return err
-	}
-	return c.Redirect(http.StatusSeeOther, "/redirect")
+	return c.Redirect(http.StatusSeeOther, "https://"+extentionId+".chromiumapp.org/callback#token="+token.AccessToken)
 }
 
 type Post struct {
@@ -140,7 +136,6 @@ func NewRouter() *echo.Echo {
 	// Routes
 	e.GET("/try", GetRedirectUrl)
 	e.GET("/oauth2", GetToken)
-	e.POST("/token", ResponseToken)
 
 	return e
 }
