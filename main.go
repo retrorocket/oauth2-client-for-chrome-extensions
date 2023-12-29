@@ -29,6 +29,7 @@ var (
 		},
 	}
 	extentionId = os.Getenv("RC_EXTENSION_ID")
+	appUrl      = "https://" + extentionId + ".chromiumapp.org/callback"
 )
 
 func RandomString(n int) string {
@@ -64,47 +65,20 @@ func GetToken(c echo.Context) error {
 	sess, _ := session.Get("session", c)
 	state, _ := sess.Values["state"]
 	if state != stateParam {
-		return c.NoContent(http.StatusForbidden)
+		return c.Redirect(http.StatusSeeOther, appUrl+"#error")
 	}
 	code := c.QueryParam("code")
 	if code == "" {
-		return c.NoContent(http.StatusForbidden)
+		return c.Redirect(http.StatusSeeOther, appUrl+"#error")
 	}
 	token, err := config.Exchange(oauth2.NoContext, code)
 	if err != nil {
-		return err
+		return c.Redirect(http.StatusSeeOther, appUrl+"#error")
 	}
-	return c.Redirect(http.StatusSeeOther, "https://"+extentionId+".chromiumapp.org/callback#token="+token.AccessToken)
-}
-
-type Post struct {
-	App string `json:"app"`
-}
-
-type Result struct {
-	Token string `json:"access_token"`
-}
-
-func ResponseToken(c echo.Context) error {
-	post := new(Post)
-	if err := c.Bind(post); err != nil {
-		return err
-	}
-	extentionId := os.Getenv("RC_EXTENSION_ID")
-	if c.Request().Header.Get("Origin") != "chrome-extension://"+extentionId {
-		return c.NoContent(http.StatusForbidden)
-	}
-	sess, _ := session.Get("session", c)
-	token, _ := sess.Values["token"]
 	sess.Options.MaxAge = -1
-	err := sess.Save(c.Request(), c.Response())
-	if err != nil {
-		return err
-	}
-	result := &Result{
-		Token: token.(string),
-	}
-	return c.JSON(http.StatusOK, result)
+	sess.Save(c.Request(), c.Response())
+
+	return c.Redirect(http.StatusSeeOther, appUrl+"#token="+token.AccessToken)
 }
 
 func main() {
@@ -121,13 +95,6 @@ func NewRouter() *echo.Echo {
 		panic(err)
 	}
 	e.Use(session.Middleware(store))
-
-	// Setting CORS
-	extentionId := os.Getenv("RC_EXTENSION_ID")
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"chrome-extension://" + extentionId, "extension://" + extentionId},
-		AllowMethods: []string{http.MethodGet, http.MethodPost},
-	}))
 
 	// Middleware
 	e.Use(middleware.Logger())
