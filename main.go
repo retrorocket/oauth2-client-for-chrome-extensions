@@ -65,15 +65,15 @@ func GetToken(c echo.Context) error {
 	sess, _ := session.Get("session", c)
 	state, _ := sess.Values["state"]
 	if state != stateParam {
-		return c.Redirect(http.StatusSeeOther, appUrl+"#error")
+		return c.NoContent(http.StatusForbidden)
 	}
 	code := c.QueryParam("code")
 	if code == "" {
-		return c.Redirect(http.StatusSeeOther, appUrl+"#error")
+		return c.NoContent(http.StatusForbidden)
 	}
 	token, err := config.Exchange(oauth2.NoContext, code)
 	if err != nil {
-		return c.Redirect(http.StatusSeeOther, appUrl+"#error")
+		return err
 	}
 	sess.Options.MaxAge = -1
 	sess.Save(c.Request(), c.Response())
