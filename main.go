@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
@@ -49,12 +53,16 @@ func RandomString(n int) (string, error) {
 }
 
 func GetRedirectUrl(c echo.Context) error {
-	sess, _ := session.Get("session", c)
+	sess, err := session.Get("session", c)
+	if err != nil {
+		return err
+	}
 	sess.Options = &sessions.Options{
 		Path:     "/",
 		MaxAge:   60 * 5,
 		HttpOnly: true,
 		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	}
 	state, err := RandomString(20)
 	if err != nil {
@@ -71,7 +79,10 @@ func GetRedirectUrl(c echo.Context) error {
 
 func GetToken(c echo.Context) error {
 	stateParam := c.QueryParam("state")
-	sess, _ := session.Get("session", c)
+	sess, err := session.Get("session", c)
+	if err != nil {
+		return err
+	}
 	state, _ := sess.Values["state"]
 	if state != stateParam {
 		return c.NoContent(http.StatusForbidden)
@@ -80,12 +91,14 @@ func GetToken(c echo.Context) error {
 	if code == "" {
 		return c.NoContent(http.StatusForbidden)
 	}
-	token, err := config.Exchange(oauth2.NoContext, code)
+	token, err := config.Exchange(context.TODO(), code)
 	if err != nil {
 		return err
 	}
 	sess.Options.MaxAge = -1
-	sess.Save(c.Request(), c.Response())
+	if err := sess.Save(c.Request(), c.Response()); err != nil {
+		return err
+	}
 
 	return c.Redirect(http.StatusSeeOther, appUrl+"#token="+token.AccessToken)
 }
@@ -106,7 +119,7 @@ func NewRouter() *echo.Echo {
 	e.Use(session.Middleware(store))
 
 	// Middleware
-	e.Use(middleware.Logger())
+	e.Use(requestLogger())
 	e.Use(middleware.Recover())
 
 	// Routes
@@ -114,4 +127,50 @@ func NewRouter() *echo.Echo {
 	e.GET("/oauth2", GetToken)
 
 	return e
+}
+
+func requestLogger() echo.MiddlewareFunc {
+	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		HandleError:      true,
+		LogLatency:       true,
+		LogRequestID:     true,
+		LogRemoteIP:      true,
+		LogHost:          true,
+		LogMethod:        true,
+		LogURI:           true,
+		LogUserAgent:     true,
+		LogStatus:        true,
+		LogError:         true,
+		LogContentLength: true,
+		LogResponseSize:  true,
+		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			errorMessage := ""
+			if v.Error != nil {
+				errorMessage = v.Error.Error()
+			}
+			bytesIn, _ := strconv.ParseInt(v.ContentLength, 10, 64)
+			// Preserve the previous logger's JSON fields and output destination.
+			return json.NewEncoder(c.Logger().Output()).Encode(struct {
+				Time         string        `json:"time"`
+				ID           string        `json:"id"`
+				RemoteIP     string        `json:"remote_ip"`
+				Host         string        `json:"host"`
+				Method       string        `json:"method"`
+				URI          string        `json:"uri"`
+				UserAgent    string        `json:"user_agent"`
+				Status       int           `json:"status"`
+				Error        string        `json:"error"`
+				Latency      time.Duration `json:"latency"`
+				LatencyHuman string        `json:"latency_human"`
+				BytesIn      int64         `json:"bytes_in"`
+				BytesOut     int64         `json:"bytes_out"`
+			}{
+				Time: time.Now().Format(time.RFC3339Nano), ID: v.RequestID,
+				RemoteIP: v.RemoteIP, Host: v.Host, Method: v.Method, URI: v.URI,
+				UserAgent: v.UserAgent, Status: v.Status, Error: errorMessage,
+				Latency: v.Latency, LatencyHuman: v.Latency.String(),
+				BytesIn: bytesIn, BytesOut: v.ResponseSize,
+			})
+		},
+	})
 }
