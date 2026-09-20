@@ -1,7 +1,8 @@
 package main
 
 import (
-	"math/rand"
+	"crypto/rand"
+	"math/big"
 	"net/http"
 	"os"
 
@@ -32,14 +33,19 @@ var (
 	appUrl      = "https://" + extentionId + ".chromiumapp.org/callback"
 )
 
-func RandomString(n int) string {
+func RandomString(n int) (string, error) {
 	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	limit := big.NewInt(int64(len(letters)))
 
 	s := make([]rune, n)
 	for i := range s {
-		s[i] = letters[rand.Intn(len(letters))]
+		index, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			return "", err
+		}
+		s[i] = letters[index.Int64()]
 	}
-	return string(s)
+	return string(s), nil
 }
 
 func GetRedirectUrl(c echo.Context) error {
@@ -50,9 +56,12 @@ func GetRedirectUrl(c echo.Context) error {
 		HttpOnly: true,
 		Secure:   true,
 	}
-	state := RandomString(20)
+	state, err := RandomString(20)
+	if err != nil {
+		return err
+	}
 	sess.Values["state"] = state
-	err := sess.Save(c.Request(), c.Response())
+	err = sess.Save(c.Request(), c.Response())
 	if err != nil {
 		return err
 	}
