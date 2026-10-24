@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -85,11 +88,13 @@ func TestRequestLogger(t *testing.T) {
 }
 
 type testSessionStore struct {
-	getErr     error
-	saveErr    error
-	nilSession bool
-	saved      int
-	maxAge     int
+	getErr      error
+	saveErr     error
+	nilSession  bool
+	saved       int
+	maxAge      int
+	values      map[interface{}]interface{}
+	savedValues map[interface{}]interface{}
 }
 
 func (s *testSessionStore) Get(r *http.Request, name string) (*sessions.Session, error) {
@@ -103,12 +108,17 @@ func (s *testSessionStore) New(_ *http.Request, name string) (*sessions.Session,
 	sess := sessions.NewSession(s, name)
 	sess.Options = &sessions.Options{MaxAge: 300}
 	sess.Values["state"] = "valid-state"
+	sess.Values["code_verifier"] = strings.Repeat("v", 43)
+	if s.values != nil {
+		sess.Values = s.values
+	}
 	return sess, s.getErr
 }
 
 func (s *testSessionStore) Save(_ *http.Request, _ http.ResponseWriter, sess *sessions.Session) error {
 	s.saved++
 	s.maxAge = sess.Options.MaxAge
+	s.savedValues = sess.Values
 	return s.saveErr
 }
 
@@ -144,6 +154,12 @@ func TestOAuthSessionErrors(t *testing.T) {
 			t.Cleanup(func() { http.DefaultClient = originalClient })
 			http.DefaultClient = &http.Client{Transport: testRoundTripper(func(r *http.Request) (*http.Response, error) {
 				tokenCalls++
+				if err := r.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				if r.Form.Get("code_verifier") != strings.Repeat("v", 43) {
+					t.Fatal("token exchange must include the session's PKCE verifier")
+				}
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -175,6 +191,14 @@ func TestOAuthSessionErrors(t *testing.T) {
 			}
 			if tc.wantTokens == 1 && store.maxAge != -1 {
 				t.Error("callback must save session invalidation")
+			}
+			if tc.wantTokens == 1 {
+				if _, ok := store.savedValues["code_verifier"]; ok {
+					t.Error("callback must remove the verifier from the session")
+				}
+				if _, ok := store.savedValues["state"]; ok {
+					t.Error("callback must remove state from the session")
+				}
 			}
 		})
 	}
@@ -250,6 +274,73 @@ func TestRequestLoggerOmitsCallbackQuery(t *testing.T) {
 				if strings.Contains(output.String(), secret) {
 					t.Errorf("callback query leaked into log: %s", secret)
 				}
+			}
+		})
+	}
+}
+
+func TestPKCEAuthorization(t *testing.T) {
+	var previousVerifier string
+	for i := 0; i < 2; i++ {
+		store := &testSessionStore{}
+		e := echo.New()
+		rec := httptest.NewRecorder()
+		c := e.NewContext(httptest.NewRequest(http.MethodGet, "/try", nil), rec)
+		if err := session.Middleware(store)(GetRedirectUrl)(c); err != nil {
+			t.Fatal(err)
+		}
+		location, err := url.Parse(rec.Header().Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		verifier, _ := store.savedValues["code_verifier"].(string)
+		if len(verifier) < 43 || len(verifier) > 128 || verifier == previousVerifier {
+			t.Fatal("expected a fresh PKCE verifier of valid length")
+		}
+		previousVerifier = verifier
+		digest := sha256.Sum256([]byte(verifier))
+		query := location.Query()
+		if query.Get("code_challenge_method") != "S256" || query.Get("code_challenge") != base64.RawURLEncoding.EncodeToString(digest[:]) {
+			t.Fatal("authorization request must contain the verifier's S256 challenge")
+		}
+		if query.Get("state") == "" || query.Get("state") != store.savedValues["state"] {
+			t.Fatal("authorization state must match the session")
+		}
+		if strings.Contains(location.String(), verifier) {
+			t.Fatal("authorization redirect must not expose the verifier")
+		}
+	}
+}
+
+func TestPKCECallbackRejectsInvalidSession(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values map[interface{}]interface{}
+		query  string
+	}{
+		{"missing verifier", map[interface{}]interface{}{"state": "valid-state"}, "state=valid-state&code=test-code"},
+		{"empty verifier", map[interface{}]interface{}{"state": "valid-state", "code_verifier": ""}, "state=valid-state&code=test-code"},
+		{"invalid verifier type", map[interface{}]interface{}{"state": "valid-state", "code_verifier": 123}, "state=valid-state&code=test-code"},
+		{"missing state", map[interface{}]interface{}{"code_verifier": strings.Repeat("v", 43)}, "code=test-code"},
+		{"mismatched state", nil, "state=wrong-state&code=test-code"},
+		{"missing code", nil, "state=valid-state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			originalClient := http.DefaultClient
+			t.Cleanup(func() { http.DefaultClient = originalClient })
+			http.DefaultClient = &http.Client{Transport: testRoundTripper(func(r *http.Request) (*http.Response, error) {
+				t.Fatal("invalid callback must not contact the token endpoint")
+				return nil, errors.New("unexpected token exchange")
+			})}
+			store := &testSessionStore{values: tc.values}
+			e := echo.New()
+			rec := httptest.NewRecorder()
+			c := e.NewContext(httptest.NewRequest(http.MethodGet, "/oauth2?"+tc.query, nil), rec)
+			if err := session.Middleware(store)(GetToken)(c); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusForbidden || store.saved != 0 {
+				t.Fatalf("status/saves = %d/%d, want 403/0", rec.Code, store.saved)
 			}
 		})
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -71,12 +70,14 @@ func GetRedirectUrl(c *echo.Context) error {
 		return err
 	}
 	sess.Values["state"] = state
+	verifier := oauth2.GenerateVerifier()
+	sess.Values["code_verifier"] = verifier
 	err = sess.Save(c.Request(), c.Response())
 	if err != nil {
 		return err
 	}
 
-	return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOnline))
+	return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOnline, oauth2.S256ChallengeOption(verifier)))
 }
 
 func GetToken(c *echo.Context) error {
@@ -85,19 +86,25 @@ func GetToken(c *echo.Context) error {
 	if err != nil {
 		return err
 	}
-	state, _ := sess.Values["state"]
-	if state != stateParam {
+	state, _ := sess.Values["state"].(string)
+	if state == "" || state != stateParam {
+		return c.NoContent(http.StatusForbidden)
+	}
+	verifier, _ := sess.Values["code_verifier"].(string)
+	if verifier == "" {
 		return c.NoContent(http.StatusForbidden)
 	}
 	code := c.QueryParam("code")
 	if code == "" {
 		return c.NoContent(http.StatusForbidden)
 	}
-	token, err := config.Exchange(context.TODO(), code)
+	token, err := config.Exchange(c.Request().Context(), code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return err
 	}
 	sess.Options.MaxAge = -1
+	delete(sess.Values, "state")
+	delete(sess.Values, "code_verifier")
 	if err := sess.Save(c.Request(), c.Response()); err != nil {
 		return err
 	}
