@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/gorilla/sessions"
-	"github.com/labstack/echo-contrib/session"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo-contrib/v5/session"
+	"github.com/labstack/echo/v5"
 )
 
 func TestRequestLogger(t *testing.T) {
@@ -24,23 +24,22 @@ func TestRequestLogger(t *testing.T) {
 		body    string
 		errText string
 	}{
-		{"success", func(c echo.Context) error { return c.String(http.StatusOK, "ok") }, http.StatusOK, "ok", ""},
-		{"redirect", func(c echo.Context) error { return c.Redirect(http.StatusSeeOther, "/next") }, http.StatusSeeOther, "", ""},
-		{"error", func(c echo.Context) error { return errors.New("exchange failed") }, http.StatusBadGateway, "failed", "exchange failed"},
+		{"success", func(c *echo.Context) error { return c.String(http.StatusOK, "ok") }, http.StatusOK, "ok", ""},
+		{"redirect", func(c *echo.Context) error { return c.Redirect(http.StatusSeeOther, "/next") }, http.StatusSeeOther, "", ""},
+		{"error", func(c *echo.Context) error { return errors.New("exchange failed") }, http.StatusBadGateway, "failed", "exchange failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := echo.New()
 			var output bytes.Buffer
-			e.Logger.SetOutput(&output)
 			errorCalls := 0
-			e.HTTPErrorHandler = func(err error, c echo.Context) {
-				if c.Response().Committed {
+			e.HTTPErrorHandler = func(c *echo.Context, err error) {
+				if response, _ := echo.UnwrapResponse(c.Response()); response != nil && response.Committed {
 					return
 				}
 				errorCalls++
 				_ = c.String(http.StatusBadGateway, "failed")
 			}
-			e.Use(requestLogger())
+			e.Use(requestLogger(&output))
 			e.POST("/test", tc.handler)
 			req := httptest.NewRequest(http.MethodPost, "/test?key=value", strings.NewReader("abc"))
 			req.Header.Set(echo.HeaderContentLength, "3")
@@ -161,7 +160,11 @@ func TestOAuthSessionErrors(t *testing.T) {
 				if !errors.Is(err, sessionErr) {
 					t.Fatalf("error = %v, want session error", err)
 				}
-				if c.Response().Committed || rec.Header().Get("Location") != "" || rec.Body.Len() != 0 {
+				response, unwrapErr := echo.UnwrapResponse(c.Response())
+				if unwrapErr != nil {
+					t.Fatal(unwrapErr)
+				}
+				if response.Committed || rec.Header().Get("Location") != "" || rec.Body.Len() != 0 {
 					t.Fatal("session failure must not send an OAuth redirect or token")
 				}
 			} else if err != nil || rec.Code != http.StatusSeeOther || rec.Header().Get("Location") == "" {

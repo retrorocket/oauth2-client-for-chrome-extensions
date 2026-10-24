@@ -1,27 +1,18 @@
 module oauth2-client
 
-go 1.24.0
+go 1.26.0
 
 require (
 	github.com/gorilla/securecookie v1.1.2
 	github.com/gorilla/sessions v1.4.0
-	github.com/labstack/echo-contrib v0.17.4
-	github.com/labstack/echo/v4 v4.15.0
-	golang.org/x/oauth2 v0.34.0
+	github.com/labstack/echo-contrib/v5 v5.0.1
+	github.com/labstack/echo/v5 v5.4.2
+	golang.org/x/oauth2 v0.37.0
 	gopkg.in/boj/redistore.v1 v1.0.0-20160128113310-fc113767cd6b
 )
 
 require (
 	github.com/garyburd/redigo v1.6.4 // indirect
-	github.com/gorilla/context v1.1.2 // indirect
-	github.com/labstack/gommon v0.4.2 // indirect
-	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	github.com/valyala/fasttemplate v1.2.2 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
-	golang.org/x/time v0.14.0 // indirect
+	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/time v0.16.0 // indirect
 )

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"io"
 	"math/big"
 	"net/http"
 	"os"
@@ -12,9 +14,9 @@ import (
 
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
-	"github.com/labstack/echo-contrib/session"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo-contrib/v5/session"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"golang.org/x/oauth2"
 	redisStore "gopkg.in/boj/redistore.v1"
 )
@@ -52,7 +54,7 @@ func RandomString(n int) (string, error) {
 	return string(s), nil
 }
 
-func GetRedirectUrl(c echo.Context) error {
+func GetRedirectUrl(c *echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return err
@@ -77,7 +79,7 @@ func GetRedirectUrl(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, config.AuthCodeURL(state, oauth2.AccessTypeOnline))
 }
 
-func GetToken(c echo.Context) error {
+func GetToken(c *echo.Context) error {
 	stateParam := c.QueryParam("state")
 	sess, err := session.Get("session", c)
 	if err != nil {
@@ -106,7 +108,10 @@ func GetToken(c echo.Context) error {
 func main() {
 	router := NewRouter()
 	// Start server
-	router.Logger.Fatal(router.Start(":28199"))
+	if err := router.Start(":28199"); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		router.Logger.Error("server stopped", "error", err)
+		os.Exit(1)
+	}
 }
 
 func NewRouter() *echo.Echo {
@@ -119,7 +124,7 @@ func NewRouter() *echo.Echo {
 	e.Use(session.Middleware(store))
 
 	// Middleware
-	e.Use(requestLogger())
+	e.Use(requestLogger(os.Stdout))
 	e.Use(middleware.Recover())
 
 	// Routes
@@ -129,7 +134,7 @@ func NewRouter() *echo.Echo {
 	return e
 }
 
-func requestLogger() echo.MiddlewareFunc {
+func requestLogger(output io.Writer) echo.MiddlewareFunc {
 	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		HandleError:      true,
 		LogLatency:       true,
@@ -140,17 +145,16 @@ func requestLogger() echo.MiddlewareFunc {
 		LogURI:           true,
 		LogUserAgent:     true,
 		LogStatus:        true,
-		LogError:         true,
 		LogContentLength: true,
 		LogResponseSize:  true,
-		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+		LogValuesFunc: func(c *echo.Context, v middleware.RequestLoggerValues) error {
 			errorMessage := ""
 			if v.Error != nil {
 				errorMessage = v.Error.Error()
 			}
 			bytesIn, _ := strconv.ParseInt(v.ContentLength, 10, 64)
 			// Preserve the previous logger's JSON fields and output destination.
-			return json.NewEncoder(c.Logger().Output()).Encode(struct {
+			return json.NewEncoder(output).Encode(struct {
 				Time         string        `json:"time"`
 				ID           string        `json:"id"`
 				RemoteIP     string        `json:"remote_ip"`
