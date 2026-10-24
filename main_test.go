@@ -179,3 +179,78 @@ func TestOAuthSessionErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestRequestLoggerClientIP(t *testing.T) {
+	for _, tc := range []struct {
+		name, peer, forwarded, want string
+	}{
+		{"local proxy", "127.0.0.1:12345", "203.0.113.10", "203.0.113.10"},
+		{"IPv6 local proxy", "[::1]:12345", "2001:db8::10", "2001:db8::10"},
+		{"forged prefix", "127.0.0.1:12345", "198.51.100.99, 203.0.113.10", "203.0.113.10"},
+		{"direct request", "203.0.113.10:12345", "198.51.100.99", "203.0.113.10"},
+		{"untrusted private peer", "10.0.0.1:12345", "198.51.100.99", "10.0.0.1"},
+		{"untrusted link local peer", "169.254.1.1:12345", "198.51.100.99", "169.254.1.1"},
+		{"no header", "127.0.0.1:12345", "", "127.0.0.1"},
+		{"invalid header", "127.0.0.1:12345", "invalid", "127.0.0.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := echo.New()
+			e.IPExtractor = clientIPExtractor()
+			var output bytes.Buffer
+			e.Use(requestLogger(&output))
+			e.GET("/try", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
+			req := httptest.NewRequest(http.MethodGet, "/try", nil)
+			req.RemoteAddr = tc.peer
+			if tc.forwarded != "" {
+				req.Header.Set(echo.HeaderXForwardedFor, tc.forwarded)
+			}
+			e.ServeHTTP(httptest.NewRecorder(), req)
+			var entry struct {
+				RemoteIP string `json:"remote_ip"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry.RemoteIP != tc.want {
+				t.Errorf("remote_ip = %q, want %q", entry.RemoteIP, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequestLoggerOmitsCallbackQuery(t *testing.T) {
+	for _, status := range []int{http.StatusSeeOther, http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			e := echo.New()
+			var output bytes.Buffer
+			e.Use(requestLogger(&output))
+			e.GET("/oauth2", func(c *echo.Context) error {
+				if c.QueryParam("code") != "secret-code" || c.QueryParam("state") != "secret-state" {
+					t.Fatal("logger changed the callback query")
+				}
+				if status == http.StatusInternalServerError {
+					return errors.New("exchange failed")
+				}
+				return c.NoContent(status)
+			})
+			req := httptest.NewRequest(http.MethodGet, "/oauth2?code=secret-code&state=secret-state&scope=private-scope", nil)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			if rec.Code != status {
+				t.Fatalf("status = %d, want %d", rec.Code, status)
+			}
+			var entry map[string]any
+			if err := json.Unmarshal(output.Bytes(), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry["uri"] != "/oauth2" {
+				t.Errorf("uri = %v, want /oauth2", entry["uri"])
+			}
+			for _, secret := range []string{"secret-code", "secret-state", "private-scope"} {
+				if strings.Contains(output.String(), secret) {
+					t.Errorf("callback query leaked into log: %s", secret)
+				}
+			}
+		})
+	}
+}

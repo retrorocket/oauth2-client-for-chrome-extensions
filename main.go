@@ -117,6 +117,7 @@ func main() {
 func NewRouter() *echo.Echo {
 	// Echo instance
 	e := echo.New()
+	e.IPExtractor = clientIPExtractor()
 	store, err := redisStore.NewRediStore(10, "tcp", ":6379", "", []byte(securecookie.GenerateRandomKey(32)))
 	if err != nil {
 		panic(err)
@@ -132,6 +133,15 @@ func NewRouter() *echo.Echo {
 	e.GET("/oauth2", GetToken)
 
 	return e
+}
+
+// Only the local reverse proxy may supply forwarded client addresses.
+func clientIPExtractor() echo.IPExtractor {
+	return echo.ExtractIPFromXFFHeader(
+		echo.TrustLoopback(true),
+		echo.TrustPrivateNet(false),
+		echo.TrustLinkLocal(false),
+	)
 }
 
 func requestLogger(output io.Writer) echo.MiddlewareFunc {
@@ -152,6 +162,11 @@ func requestLogger(output io.Writer) echo.MiddlewareFunc {
 			if v.Error != nil {
 				errorMessage = v.Error.Error()
 			}
+			uri := v.URI
+			if c.Request().URL.Path == "/oauth2" {
+				// The callback query contains OAuth authorization credentials.
+				uri = "/oauth2"
+			}
 			bytesIn, _ := strconv.ParseInt(v.ContentLength, 10, 64)
 			// Preserve the previous logger's JSON fields and output destination.
 			return json.NewEncoder(output).Encode(struct {
@@ -170,7 +185,7 @@ func requestLogger(output io.Writer) echo.MiddlewareFunc {
 				BytesOut     int64         `json:"bytes_out"`
 			}{
 				Time: time.Now().Format(time.RFC3339Nano), ID: v.RequestID,
-				RemoteIP: v.RemoteIP, Host: v.Host, Method: v.Method, URI: v.URI,
+				RemoteIP: v.RemoteIP, Host: v.Host, Method: v.Method, URI: uri,
 				UserAgent: v.UserAgent, Status: v.Status, Error: errorMessage,
 				Latency: v.Latency, LatencyHuman: v.Latency.String(),
 				BytesIn: bytesIn, BytesOut: v.ResponseSize,
