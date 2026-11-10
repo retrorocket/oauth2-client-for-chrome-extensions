@@ -4,10 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -91,6 +93,19 @@ func GetToken(c *echo.Context) error {
 		return c.NoContent(http.StatusForbidden)
 	}
 	verifier, _ := sess.Values["code_verifier"].(string)
+
+	// state と code_verifier は一度きりの値なので、トークン交換より前に破棄する。
+	// 交換の失敗・認可拒否（error=access_denied）・再送のいずれでも再利用させない。
+	if sess.Options == nil {
+		sess.Options = &sessions.Options{Path: "/"}
+	}
+	sess.Options.MaxAge = -1
+	delete(sess.Values, "state")
+	delete(sess.Values, "code_verifier")
+	if err := sess.Save(c.Request(), c.Response()); err != nil {
+		return err
+	}
+
 	if verifier == "" {
 		return c.NoContent(http.StatusForbidden)
 	}
@@ -102,17 +117,19 @@ func GetToken(c *echo.Context) error {
 	if err != nil {
 		return err
 	}
-	sess.Options.MaxAge = -1
-	delete(sess.Values, "state")
-	delete(sess.Values, "code_verifier")
-	if err := sess.Save(c.Request(), c.Response()); err != nil {
-		return err
-	}
 
 	return c.Redirect(http.StatusSeeOther, appUrl+"#token="+token.AccessToken)
 }
 
+// Chrome 拡張 ID は a〜p の32文字。不正な値のままだとトークンの返却先 URL が
+// 意図しないホストになり得るため、起動時に拒否する。
+var extensionIDPattern = regexp.MustCompile(`^[a-p]{32}$`)
+
 func main() {
+	if !extensionIDPattern.MatchString(extentionId) {
+		fmt.Fprintln(os.Stderr, "RC_EXTENSION_ID must be a 32-character Chrome extension ID")
+		os.Exit(1)
+	}
 	router := NewRouter()
 	// Start server
 	if err := router.Start(":28199"); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -133,6 +150,7 @@ func NewRouter() *echo.Echo {
 
 	// Middleware
 	e.Use(requestLogger(os.Stdout))
+	e.Use(noStoreHeaders)
 	e.Use(middleware.Recover())
 
 	// Routes
@@ -140,6 +158,18 @@ func NewRouter() *echo.Echo {
 	e.GET("/oauth2", GetToken)
 
 	return e
+}
+
+// レスポンスの Location にはアクセストークンや state が含まれるため、
+// ブラウザ・リバースプロキシにキャッシュさせず、Referer にも載せない（RFC 6749 5.1）。
+func noStoreHeaders(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		h := c.Response().Header()
+		h.Set(echo.HeaderCacheControl, "no-store")
+		h.Set("Pragma", "no-cache")
+		h.Set("Referrer-Policy", "no-referrer")
+		return next(c)
+	}
 }
 
 // Only the local reverse proxy may supply forwarded client addresses.
@@ -169,11 +199,9 @@ func requestLogger(output io.Writer) echo.MiddlewareFunc {
 			if v.Error != nil {
 				errorMessage = v.Error.Error()
 			}
-			uri := v.URI
-			if c.Request().URL.Path == "/oauth2" {
-				// The callback query contains OAuth authorization credentials.
-				uri = "/oauth2"
-			}
+			// クエリ文字列は記録しない。コールバックの code / state / scope は
+			// 認可情報であり、パス表記の揺れ（/oauth2/ 等）でも漏れないよう全リクエスト共通で落とす。
+			uri := c.Request().URL.EscapedPath()
 			bytesIn, _ := strconv.ParseInt(v.ContentLength, 10, 64)
 			// Preserve the previous logger's JSON fields and output destination.
 			return json.NewEncoder(output).Encode(struct {

@@ -68,7 +68,7 @@ func TestRequestLogger(t *testing.T) {
 			}
 			for key, want := range map[string]any{
 				"id": "request-id", "remote_ip": "192.0.2.1", "host": "example.com",
-				"method": "POST", "uri": "/test?key=value", "user_agent": "test-agent",
+				"method": "POST", "uri": "/test", "user_agent": "test-agent",
 				"status": float64(tc.status), "error": tc.errText,
 				"bytes_in": float64(3), "bytes_out": float64(len(tc.body)),
 			} {
@@ -144,7 +144,7 @@ func TestOAuthSessionErrors(t *testing.T) {
 		{"redirect save error", GetRedirectUrl, nil, sessionErr, false, 1, 0},
 		{"callback get error", GetToken, sessionErr, nil, false, 0, 0},
 		{"callback nil session", GetToken, sessionErr, nil, true, 0, 0},
-		{"callback save error", GetToken, nil, sessionErr, false, 1, 1},
+		{"callback save error", GetToken, nil, sessionErr, false, 1, 0},
 		{"redirect success", GetRedirectUrl, nil, nil, false, 1, 0},
 		{"callback success", GetToken, nil, nil, false, 1, 1},
 	} {
@@ -314,16 +314,19 @@ func TestPKCEAuthorization(t *testing.T) {
 
 func TestPKCECallbackRejectsInvalidSession(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		values map[interface{}]interface{}
-		query  string
+		name      string
+		values    map[interface{}]interface{}
+		query     string
+		wantSaves int
 	}{
-		{"missing verifier", map[interface{}]interface{}{"state": "valid-state"}, "state=valid-state&code=test-code"},
-		{"empty verifier", map[interface{}]interface{}{"state": "valid-state", "code_verifier": ""}, "state=valid-state&code=test-code"},
-		{"invalid verifier type", map[interface{}]interface{}{"state": "valid-state", "code_verifier": 123}, "state=valid-state&code=test-code"},
-		{"missing state", map[interface{}]interface{}{"code_verifier": strings.Repeat("v", 43)}, "code=test-code"},
-		{"mismatched state", nil, "state=wrong-state&code=test-code"},
-		{"missing code", nil, "state=valid-state"},
+		// state が一致した時点で session は消費（破棄）される。
+		{"missing verifier", map[interface{}]interface{}{"state": "valid-state"}, "state=valid-state&code=test-code", 1},
+		{"empty verifier", map[interface{}]interface{}{"state": "valid-state", "code_verifier": ""}, "state=valid-state&code=test-code", 1},
+		{"invalid verifier type", map[interface{}]interface{}{"state": "valid-state", "code_verifier": 123}, "state=valid-state&code=test-code", 1},
+		{"missing state", map[interface{}]interface{}{"code_verifier": strings.Repeat("v", 43)}, "code=test-code", 0},
+		{"mismatched state", nil, "state=wrong-state&code=test-code", 0},
+		{"missing code", nil, "state=valid-state", 1},
+		{"authorization denied", nil, "state=valid-state&error=access_denied", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			originalClient := http.DefaultClient
@@ -339,9 +342,104 @@ func TestPKCECallbackRejectsInvalidSession(t *testing.T) {
 			if err := session.Middleware(store)(GetToken)(c); err != nil {
 				t.Fatal(err)
 			}
-			if rec.Code != http.StatusForbidden || store.saved != 0 {
-				t.Fatalf("status/saves = %d/%d, want 403/0", rec.Code, store.saved)
+			if rec.Code != http.StatusForbidden || store.saved != tc.wantSaves {
+				t.Fatalf("status/saves = %d/%d, want 403/%d", rec.Code, store.saved, tc.wantSaves)
+			}
+			if tc.wantSaves == 1 {
+				if store.maxAge != -1 {
+					t.Error("consumed callback must invalidate the session")
+				}
+				if _, ok := store.savedValues["state"]; ok {
+					t.Error("consumed callback must remove state from the session")
+				}
+				if _, ok := store.savedValues["code_verifier"]; ok {
+					t.Error("consumed callback must remove the verifier from the session")
+				}
 			}
 		})
+	}
+}
+
+func TestCallbackConsumesSessionBeforeExchange(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	store := &testSessionStore{}
+	http.DefaultClient = &http.Client{Transport: testRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if store.saved != 1 || store.maxAge != -1 {
+			t.Error("session must be invalidated before contacting the token endpoint")
+		}
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"invalid_grant"}`)),
+			Request:    r,
+		}, nil
+	})}
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/oauth2?state=valid-state&code=test-code", nil), rec)
+	if err := session.Middleware(store)(GetToken)(c); err == nil {
+		t.Fatal("failed exchange must return an error")
+	}
+	if store.saved != 1 || store.maxAge != -1 || rec.Header().Get("Location") != "" {
+		t.Fatalf("failed exchange: saves=%d maxAge=%d location=%q", store.saved, store.maxAge, rec.Header().Get("Location"))
+	}
+}
+
+func TestNoStoreHeaders(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: testRoundTripper(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"access_token":"test-token","token_type":"Bearer"}`)),
+			Request:    r,
+		}, nil
+	})}
+	e := echo.New()
+	e.Use(session.Middleware(&testSessionStore{}))
+	e.Use(noStoreHeaders)
+	e.GET("/try", GetRedirectUrl)
+	e.GET("/oauth2", GetToken)
+	for _, target := range []string{"/try", "/oauth2?state=valid-state&code=test-code", "/oauth2?state=wrong"} {
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if target == "/oauth2?state=valid-state&code=test-code" && !strings.HasSuffix(rec.Header().Get("Location"), "#token=test-token") {
+			t.Fatalf("token redirect changed: %q", rec.Header().Get("Location"))
+		}
+		for key, want := range map[string]string{"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"} {
+			if got := rec.Header().Get(key); got != want {
+				t.Errorf("%s: %s = %q, want %q", target, key, got, want)
+			}
+		}
+	}
+}
+
+func TestRequestLoggerOmitsQueryOnAnyPath(t *testing.T) {
+	for _, target := range []string{"/oauth2/?code=secret-code&state=secret-state", "/./oauth2?code=secret-code", "/try?code=secret-code"} {
+		e := echo.New()
+		var output bytes.Buffer
+		e.Use(requestLogger(&output))
+		e.GET("/try", func(c *echo.Context) error { return c.NoContent(http.StatusNoContent) })
+		e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, target, nil))
+		if strings.Contains(output.String(), "secret-") {
+			t.Errorf("%s: query leaked into log: %s", target, output.String())
+		}
+	}
+}
+
+func TestExtensionIDPattern(t *testing.T) {
+	for id, want := range map[string]bool{
+		strings.Repeat("a", 32):            true,
+		"abcdefghijklmnopabcdefghijklmnop": true,
+		"":                                 false,
+		strings.Repeat("a", 31):            false,
+		strings.Repeat("q", 32):            false,
+		"evil.example/x?" + strings.Repeat("a", 17): false,
+	} {
+		if got := extensionIDPattern.MatchString(id); got != want {
+			t.Errorf("extensionIDPattern(%q) = %v, want %v", id, got, want)
+		}
 	}
 }
